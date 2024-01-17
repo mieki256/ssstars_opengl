@@ -52,3 +52,8 @@ Use font
 
 [ProFont for Windows, for Macintosh, for Linux](https://tobiasjung.name/profont/)
 
+Use library
+-----------
+
+[nothings/stb: stb single-file public domain libraries for C/C++](https://github.com/nothings/stb)
+
