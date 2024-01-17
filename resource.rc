@@ -1,0 +1,39 @@
+/* resource.rc */
+
+#include <windows.h>
+#include <scrnsave.h>
+#include "resource.h"
+
+#define IDC_STATIC_ICON     2300
+#define IDC_STATIC_TEXT     2301
+
+/* LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US */
+
+/* Screensaver title */
+STRINGTABLE
+BEGIN
+  IDS_DESCRIPTION       "Stars GL"
+END
+
+/* Icon */
+ID_APP  ICON    "icon.ico"
+
+/* Dialog */
+DLG_SCRNSAVECONFIGURE DIALOG DISCARDABLE  0, 0, 200, 120
+STYLE DS_MODALFRAME | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
+CAPTION "Stars GL setting"
+FONT 11, "Segoe UI"
+BEGIN
+  DEFPUSHBUTTON "&OK",     IDOK,      85,  100, 50, 14 
+  PUSHBUTTON    "&Cancel", IDCANCEL,  140, 100, 50, 14
+  CTEXT "Stars GL setting", IDC_STATIC_TEXT, 45, 5, 100, 14
+  LTEXT "Wait (5 - 200 msec)", IDC_STATIC_TEXT, 10, 20, 70, 14
+  LTEXT "Speed (100 - 4000)",  IDC_STATIC_TEXT, 10, 40, 70, 14
+  LTEXT "Number (10 - 4000)",  IDC_STATIC_TEXT, 10, 60, 70, 14
+  EDITTEXT IDC_WAITVALUE, 90, 20, 60, 16, ES_AUTOHSCROLL
+  EDITTEXT IDC_SPEED,     90, 40, 60, 16, ES_AUTOHSCROLL
+  EDITTEXT IDC_NUMBER,    90, 60, 60, 16, ES_AUTOHSCROLL
+  AUTOCHECKBOX "FPS display", IDC_FPSDISPLAY, 10, 80, 60, 14
+  PUSHBUTTON    "Reset",   IDC_RESET,  10, 100, 50, 14
+END
+
