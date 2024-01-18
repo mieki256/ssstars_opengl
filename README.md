@@ -54,11 +54,6 @@ Build Requirement / Environment
 
 Please enter "make".
 
-License
--------
-
-CC0 / Public Domain
-
 Author
 ------
 
