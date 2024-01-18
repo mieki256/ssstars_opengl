@@ -1,4 +1,4 @@
-// Last updated: <2024/01/17 21:09:57 +0900>
+// Last updated: <2024/01/19 02:13:31 +0900>
 //
 // stars GL screen saver by mieki256.
 //
@@ -10,14 +10,19 @@
 //
 // xxd -i texture.png > texture.h
 // windres resource.rc resource.o
-// g++ -c ssstars_opengl.cpp
+// g++ -c ssstars_opengl.cpp -o ssstars_opengl.o -O3
 // g++ ssstars_opengl.o resource.o -o ssstars_opengl.scr -static -lstdc++ -lgcc -lscrnsave -lopengl32 -lglu32 -lgdi32 -lcomctl32 -lshlwapi -lwinmm -mwindows
 
 #define _USE_MATH_DEFINES
 
+// use SHGetSpecialFolderPath()
+#define _WIN32_IE 0x0400
+
+#include <shlobj.h>
+#include <shlwapi.h>
 #include <stdlib.h>
 #include <wchar.h>
-#include <shlwapi.h>
+#include <tchar.h>
 #include <windows.h>
 #include <scrnsave.h>
 #include <math.h>
@@ -40,8 +45,12 @@
 // get rid of these warnings: truncation from const double to float conversion from double to float
 // #pragma warning(disable: 4305 4244)
 
-#define INIFILENAME "ssstars_opengl.ini"
-#define SECNAME "ssstars_opengl_config"
+// config ini file name and directory
+#define INIFILENAME _T("ssstars_opengl.ini")
+#define INIDIR _T("ssstars_opengl")
+
+// ini file section name
+#define SECNAME _T("ssstars_opengl_config")
 
 #define USE_DEPTHMASK 0
 #define USE_FOG 1
@@ -62,13 +71,9 @@ static int fps_display = 1;
 // globals for size of screen
 static int Width, Height;
 
-// static bool bTumble = true;
-
-// a global to keep track of the square's spinning
-// static GLfloat spin = 0;
-
 // fps count work
 static DWORD rec_time;
+static DWORD prev_time;
 static int count_frame;
 static int count_fps;
 
@@ -96,11 +101,130 @@ typedef struct
 
 static star objw[OBJ_MAX];
 
+// prototype
+static void initCountFps(void);
+static void closeCountFps(void);
+static void countFps(void);
+static double getRand(void);
+void initXYPos(star *);
+void initObjs(void);
+void updateObjs(float);
+GLuint createTextureFromPngInMemory(const unsigned char *, int);
+void drawText(char *);
+void Render(HDC);
+void SetupAnimation(int Width, int Height);
+static bool InitGL(HWND hWnd, HDC &hDC, HGLRC &hRC);
+static void CloseGL(HWND hWnd, HDC hDC, HGLRC hRC);
+void CleanupAnimation();
+BOOL getIniFilePath(TCHAR *filepath);
+void writeConfigToIniFile(void);
+void setConfigValueToGlobalWork(void);
+BOOL getConfigFromIniFile(void);
+int clamp(int, int, int);
+void setValueOnDialog(HWND, int, int, int, int);
+void getValueFromDialog(HWND hDlg);
+
+// ========================================
+// Screen Saver Procedure
+LRESULT WINAPI ScreenSaverProc(HWND hWnd, UINT message,
+                               WPARAM wParam, LPARAM lParam)
+{
+  static HDC hDC;
+  static HGLRC hRC;
+  static RECT rect;
+
+  switch (message)
+  {
+  case WM_CREATE:
+    GetClientRect(hWnd, &rect); // get window dimensions
+    Width = rect.right;
+    Height = rect.bottom;
+
+    initCountFps();         // initialize FPS counter
+    getConfigFromIniFile(); // get config value from ini file
+
+    // setup OpenGL, then animation
+    if (!InitGL(hWnd, hDC, hRC))
+      break;
+
+    SetupAnimation(Width, Height);
+
+    SetTimer(hWnd, TIMER, waitValue, NULL); // set timer
+    return 0;
+
+  case WM_TIMER:
+    Render(hDC); // animate
+    return 0;
+
+  case WM_DESTROY:
+    closeCountFps();
+    KillTimer(hWnd, TIMER);
+    CleanupAnimation();
+    CloseGL(hWnd, hDC, hRC);
+    return 0;
+  }
+
+  return DefScreenSaverProc(hWnd, message, wParam, lParam);
+}
+
+// ========================================
+// screen saver config dialog procedure
+BOOL WINAPI ScreenSaverConfigureDialog(HWND hDlg, UINT message,
+                                       WPARAM wParam, LPARAM lParam)
+{
+  // InitCommonControls();
+  // would need this for slider bars or other common controls
+
+  switch (message)
+  {
+  case WM_INITDIALOG:
+    // Initialize config dialog
+    LoadString(hMainInstance, IDS_DESCRIPTION, szAppName, 40);
+    getConfigFromIniFile();
+    setValueOnDialog(hDlg, waitValue, speedValue, numberValue, fps_display);
+    return TRUE;
+
+  case WM_COMMAND:
+    switch (LOWORD(wParam))
+    {
+    case IDOK:
+      // ok button pressed
+      getValueFromDialog(hDlg);
+      writeConfigToIniFile();
+      EndDialog(hDlg, LOWORD(wParam) == IDOK);
+      return TRUE;
+
+    case IDCANCEL:
+      // cancel button pressed
+      EndDialog(hDlg, LOWORD(wParam) == IDOK);
+      return TRUE;
+
+    case IDC_RESET:
+      // reset button pressed
+      setValueOnDialog(hDlg, 15, 1000, 1000, 1);
+      return TRUE;
+    }
+
+    return FALSE;
+  } // end command switch
+
+  return FALSE;
+}
+
+// ========================================
+// needed for SCRNSAVE.LIB (or libscrnsave.a)
+BOOL WINAPI RegisterDialogClasses(HANDLE hInst)
+{
+  return TRUE;
+}
+
+// ========================================
 // Init count FPS work
 static void initCountFps(void)
 {
   timeBeginPeriod(1);
   rec_time = timeGetTime();
+  prev_time = rec_time;
   count_fps = 0;
   count_frame = 0;
 }
@@ -118,24 +242,26 @@ static void countFps(void)
   DWORD t = timeGetTime() - rec_time;
 
   if (t >= 1000)
-    {
-      rec_time += 1000;
-      count_fps = count_frame;
-      count_frame = 0;
-    }
+  {
+    rec_time += 1000;
+    count_fps = count_frame;
+    count_frame = 0;
+  }
   else if (t < 0)
-    {
-      rec_time = timeGetTime();
-      count_fps = 0;
-      count_frame = 0;
-    }
+  {
+    rec_time = timeGetTime();
+    count_fps = 0;
+    count_frame = 0;
+  }
 }
 
+// get random value. (0.0 - 1.0)
 static double getRand(void)
 {
   return ((double)rand() / RAND_MAX); // retrun 0.0 - 1.0
 }
 
+// initialize object x, y position
 void initXYPos(star *o)
 {
   float h = o->z * tan((fovy / 2.0) * M_PI / 180.0);
@@ -144,53 +270,132 @@ void initXYPos(star *o)
   o->y = (getRand() * 2.0 - 1.0) * h;
 }
 
+// initialize object work
 void initObjs(void)
 {
   for (int i = 0; i < OBJ_MAX; i++)
-    {
-      objw[i].dist = dist;
-      objw[i].spd = ((float)speedValue) / 1000.0;
+  {
+    objw[i].dist = dist;
+    objw[i].spd = ((float)speedValue) / 1000.0;
 
-      int k = rand() % 4;
-      objw[i].kind = k;
-      objw[i].tx = 0.5 * (k & 0x01);
-      objw[i].ty = 0.5 * ((k >> 1) & 0x01);
-      objw[i].tw = 0.5;
-      objw[i].th = 0.5;
+    int k = rand() % 4;
+    objw[i].kind = k;
+    objw[i].tx = 0.5 * (k & 0x01);
+    objw[i].ty = 0.5 * ((k >> 1) & 0x01);
+    objw[i].tw = 0.5;
+    objw[i].th = 0.5;
 
-      objw[i].z = getRand() * (-1.0 * dist);
-      initXYPos(&(objw[i]));
-    }
+    objw[i].z = getRand() * (-1.0 * dist);
+    initXYPos(&(objw[i]));
+  }
 }
 
-void updateObjs(void)
+// update object work
+void updateObjs(float delta)
 {
   for (int i = 0; i < numberValue; i++)
+  {
+    objw[i].z += (objw[i].spd * 60.0 * delta);
+
+    if (objw[i].z >= 0.0)
     {
-      objw[i].z += objw[i].spd;
-
-      if (objw[i].z >= 0.0)
-        {
-          objw[i].z -= objw[i].dist;
-          initXYPos(&(objw[i]));
-          continue;
-        }
-
-      // get position on screen
-      GLfloat sz = (float)(Height / 2.0) / tan((fovy / 2.0) * M_PI / 180.0);
-      GLfloat sx = objw[i].x * sz / objw[i].z;
-      GLfloat sy = objw[i].y * sz / objw[i].z;
-      float wh = (float)(Width / 2.0) * 1.2;
-      float hh = (float)(Height / 2.0) * 1.2;
-
-      if (sx < -wh || wh < sx || sy < -hh || hh < sy)
-        {
-          // outside display area
-          objw[i].z = -objw[i].dist - 15.0;
-          initXYPos(&(objw[i]));
-          continue;
-        }
+      objw[i].z -= objw[i].dist;
+      initXYPos(&(objw[i]));
+      continue;
     }
+
+    // get position on screen
+    GLfloat sz = (float)(Height / 2.0) / tan((fovy / 2.0) * M_PI / 180.0);
+    GLfloat sx = objw[i].x * sz / objw[i].z;
+    GLfloat sy = objw[i].y * sz / objw[i].z;
+    float wh = (float)(Width / 2.0) * 1.2;
+    float hh = (float)(Height / 2.0) * 1.2;
+
+    if (sx < -wh || wh < sx || sy < -hh || hh < sy)
+    {
+      // outside display area
+      objw[i].z = -objw[i].dist - 15.0;
+      initXYPos(&(objw[i]));
+      continue;
+    }
+  }
+}
+
+// Initialize OpenGL
+static bool InitGL(HWND hWnd, HDC &hDC, HGLRC &hRC)
+{
+  hDC = GetDC(hWnd);
+
+#if 0
+  PIXELFORMATDESCRIPTOR pfd;
+  ZeroMemory(&pfd, sizeof pfd);
+  pfd.nSize = sizeof pfd;
+  pfd.nVersion = 1;
+
+  //pfd.dwFlags = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL; //blaine's
+  // pfd.dwFlags = PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER;
+  pfd.dwFlags = PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER | PFD_DRAW_TO_WINDOW;
+
+  pfd.iPixelType = PFD_TYPE_RGBA;
+  pfd.cColorBits = 32;
+#else
+
+  try
+  {
+    PIXELFORMATDESCRIPTOR pfd =
+        {
+            sizeof(PIXELFORMATDESCRIPTOR), // size of this pfd
+            1,                             // version number
+            // support window, OpenGL, double bufferd
+            PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER,
+            PFD_TYPE_RGBA,  // RGBA type
+            32,             // color
+            0, 0,           // R
+            0, 0,           // G
+            0, 0,           // B
+            0, 0,           // A
+            0,              // accumulation buffer
+            0, 0, 0, 0,     // accum bits ignored
+            24,             // depth
+            8,              // stencil buffer
+            0,              // auxiliary buffer
+            PFD_MAIN_PLANE, // main layer
+            0,              // reserved
+            0, 0, 0         // layermask, visiblemask, damagemask
+        };
+
+    int format = ChoosePixelFormat(hDC, &pfd);
+
+    if (format == 0)
+      throw "";
+
+    if (!SetPixelFormat(hDC, format, &pfd))
+      throw "";
+
+    hRC = wglCreateContext(hDC);
+
+    if (!hRC)
+      throw "";
+  }
+  catch (...)
+  {
+    ReleaseDC(hWnd, hDC);
+    return false;
+  }
+
+#endif
+
+  wglMakeCurrent(hDC, hRC);
+
+  return true;
+}
+
+// Shut down OpenGL
+static void CloseGL(HWND hWnd, HDC hDC, HGLRC hRC)
+{
+  wglMakeCurrent(NULL, NULL);
+  wglDeleteContext(hRC);
+  ReleaseDC(hWnd, hDC);
 }
 
 /**
@@ -236,129 +441,7 @@ GLuint createTextureFromPngInMemory(const unsigned char *_pngData, int _pngLen)
   return texture;
 }
 
-// draw text
-void drawText(char *str)
-{
-  GLsizei w = (GLsizei)fontdata_width;
-  GLsizei h = (GLsizei)fontdata_height;
-  GLfloat xorig, yorig;
-  GLfloat xmove, ymove;
-  xorig = 0;
-  yorig = 0;
-  xmove = w;
-  ymove = 0;
-
-  glPixelStorei(GL_UNPACK_ALIGNMENT, 1); // Without this, drawing will be incorrect
-
-  int slen = strlen(str);
-
-  for (int i = 0; i < slen; i++)
-    {
-      int c = str[i];
-
-      if (c == 0)
-        break;
-
-      if (c < 0x20 || c > 0x7f)
-        c = 0x20;
-
-      c -= 0x20;
-      glBitmap(w, h, xorig, yorig, xmove, ymove, &(fontdata[c][0]));
-    }
-}
-
-// main loop. draw OpenGL
-void Render(HDC hDC)
-{
-  updateObjs();
-
-  glClearColor(0.0, 0.0, 0.0, 0.0); // set background color
-  glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-  glLoadIdentity(); // Reset The View
-
-  // set camera
-  gluLookAt(0.0, 0.0, 0.0, 0.0, 0.0, -10.0, 0.0, 1.0, 0.0);
-
-  glEnable(GL_BLEND);
-
-  // enable texture
-  glEnable(GL_TEXTURE_2D);
-  glBindTexture(GL_TEXTURE_2D, texture);
-
-  // glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-  glBlendFunc(GL_ONE, GL_ONE);
-
-  glColor4f(1.0, 1.0, 1.0, 1.0); // set color
-
-  // draw objects
-#if USE_DEPTHMASK == 1
-  glDepthMask(GL_TRUE);
-  glDepthFunc(GL_LESS);
-#else
-  glDepthMask(GL_FALSE);
-  glDepthFunc(GL_LEQUAL);
-#endif
-
-  GLfloat v = 2.0;
-
-  for (int i = 0; i < numberValue; i++)
-    {
-      GLfloat tx, ty, tw, th;
-      star *o = &(objw[i]);
-      tx = o->tx;
-      ty = o->ty;
-      tw = o->tw;
-      th = o->th;
-
-      glPushMatrix();
-      glTranslatef(o->x, o->y, o->z); // translate
-
-      {
-        GLdouble m[16];
-        glGetDoublev(GL_MODELVIEW_MATRIX, m);
-        m[0] = m[5] = m[10] = 1.0;
-        m[1] = m[2] = m[4] = m[6] = m[8] = m[9] = 0.0;
-        glLoadMatrixd(m);
-      }
-
-      glBegin(GL_QUADS);
-      glTexCoord2f(tx, ty);  // set u, v
-      glVertex3f(-v, -v, 0); // Top Left
-      glTexCoord2f(tx + tw, ty);
-      glVertex3f(v, -v, 0.0); // Top Right
-      glTexCoord2f(tx + tw, ty + th);
-      glVertex3f(v, v, 0.0); // Bottom Right
-      glTexCoord2f(tx, ty + th);
-      glVertex3f(-v, v, 0.0); // Bottom Left
-      glEnd();
-      glPopMatrix();
-    }
-
-  glDisable(GL_TEXTURE_2D);
-
-#if USE_DEPTHMASK == 0
-  glDepthMask(GL_TRUE);
-  glDepthFunc(GL_LESS);
-#endif
-
-  // draw FPS text
-  if (fps_display != 0)
-    {
-      glColor4f(1, 1, 1, 1);           // set color
-      glRasterPos3f(-0.1, 1.0, -1.08); // set postion
-      {
-        char buf[512];
-        sprintf(buf, "%d FPS", count_fps);
-        drawText(buf);
-      }
-    }
-
-  SwapBuffers(hDC);
-
-  countFps(); // calc FPS
-}
-
+// setup animation
 void SetupAnimation(int Width, int Height)
 {
   // window resizing stuff
@@ -404,200 +487,252 @@ void SetupAnimation(int Width, int Height)
   texture = createTextureFromPngInMemory((unsigned char *)&texture_png, texture_png_len);
 
   if (!texture)
-    {
-      fprintf(stderr, "Failed create texture\n");
-      exit(1);
-    }
+  {
+    fprintf(stderr, "Failed create texture\n");
+    exit(1);
+  }
 
   initObjs();
 }
 
-// Initialize OpenGL
-static bool InitGL(HWND hWnd, HDC &hDC, HGLRC &hRC)
-{
-  hDC = GetDC(hWnd);
-
-#if 0
-  PIXELFORMATDESCRIPTOR pfd;
-  ZeroMemory(&pfd, sizeof pfd);
-  pfd.nSize = sizeof pfd;
-  pfd.nVersion = 1;
-
-  //pfd.dwFlags = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL; //blaine's
-  // pfd.dwFlags = PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER;
-  pfd.dwFlags = PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER | PFD_DRAW_TO_WINDOW;
-
-  pfd.iPixelType = PFD_TYPE_RGBA;
-  pfd.cColorBits = 32;
-#else
-
-  try
-    {
-      PIXELFORMATDESCRIPTOR pfd =
-        {
-          sizeof(PIXELFORMATDESCRIPTOR), // size of this pfd
-          1,                             // version number
-          // support window, OpenGL, double bufferd
-          PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER,
-          PFD_TYPE_RGBA,  // RGBA type
-          32,             // color
-          0, 0,           // R
-          0, 0,           // G
-          0, 0,           // B
-          0, 0,           // A
-          0,              // accumulation buffer
-          0, 0, 0, 0,     // accum bits ignored
-          24,             // depth
-          8,              // stencil buffer
-          0,              // auxiliary buffer
-          PFD_MAIN_PLANE, // main layer
-          0,              // reserved
-          0, 0, 0         // layermask, visiblemask, damagemask
-          };
-
-      int format = ChoosePixelFormat(hDC, &pfd);
-
-      if (format == 0)
-        throw "";
-
-      if (!SetPixelFormat(hDC, format, &pfd))
-        throw "";
-
-      hRC = wglCreateContext(hDC);
-
-      if (!hRC)
-        throw "";
-    }
-  catch (...)
-    {
-      ReleaseDC(hWnd, hDC);
-      return false;
-    }
-
-#endif
-
-  wglMakeCurrent(hDC, hRC);
-
-  return true;
-}
-
-// Shut down OpenGL
-static void CloseGL(HWND hWnd, HDC hDC, HGLRC hRC)
-{
-  wglMakeCurrent(NULL, NULL);
-  wglDeleteContext(hRC);
-  ReleaseDC(hWnd, hDC);
-}
-
+// cleanup animation
 void CleanupAnimation()
 {
   // didn't create any objects, so no need to clean them up
 }
 
+// main loop. draw OpenGL
+void Render(HDC hDC)
+{
+  DWORD now_time, deltam;
+  float delta;
+
+  // get delta time (millisecond)
+  now_time = timeGetTime();
+  deltam = now_time - prev_time;
+  if (deltam <= 0)
+    deltam = waitValue;
+
+  // get delta time (second)
+  delta = (float)deltam / 1000.0;
+  prev_time = now_time;
+
+  updateObjs(delta);
+
+  glClearColor(0.0, 0.0, 0.0, 0.0); // set background color
+  glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+  glLoadIdentity(); // Reset The View
+
+  // set camera
+  gluLookAt(0.0, 0.0, 0.0, 0.0, 0.0, -10.0, 0.0, 1.0, 0.0);
+
+  glEnable(GL_BLEND);
+
+  // enable texture
+  glEnable(GL_TEXTURE_2D);
+  glBindTexture(GL_TEXTURE_2D, texture);
+
+  // glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+  glBlendFunc(GL_ONE, GL_ONE);
+
+  glColor4f(1.0, 1.0, 1.0, 1.0); // set color
+
+  // draw objects
+#if USE_DEPTHMASK == 1
+  glDepthMask(GL_TRUE);
+  glDepthFunc(GL_LESS);
+#else
+  glDepthMask(GL_FALSE);
+  glDepthFunc(GL_LEQUAL);
+#endif
+
+  GLfloat v = 2.0;
+
+  for (int i = 0; i < numberValue; i++)
+  {
+    GLfloat tx, ty, tw, th;
+    star *o = &(objw[i]);
+    tx = o->tx;
+    ty = o->ty;
+    tw = o->tw;
+    th = o->th;
+
+    glPushMatrix();
+    glTranslatef(o->x, o->y, o->z); // translate
+
+    {
+      GLdouble m[16];
+      glGetDoublev(GL_MODELVIEW_MATRIX, m);
+      m[0] = m[5] = m[10] = 1.0;
+      m[1] = m[2] = m[4] = m[6] = m[8] = m[9] = 0.0;
+      glLoadMatrixd(m);
+    }
+
+    glBegin(GL_QUADS);
+    glTexCoord2f(tx, ty);  // set u, v
+    glVertex3f(-v, -v, 0); // Top Left
+    glTexCoord2f(tx + tw, ty);
+    glVertex3f(v, -v, 0.0); // Top Right
+    glTexCoord2f(tx + tw, ty + th);
+    glVertex3f(v, v, 0.0); // Bottom Right
+    glTexCoord2f(tx, ty + th);
+    glVertex3f(-v, v, 0.0); // Bottom Left
+    glEnd();
+    glPopMatrix();
+  }
+
+  glDisable(GL_TEXTURE_2D);
+
+#if USE_DEPTHMASK == 0
+  glDepthMask(GL_TRUE);
+  glDepthFunc(GL_LESS);
+#endif
+
+  // draw FPS text
+  if (fps_display != 0)
+  {
+    glColor4f(1, 1, 1, 1);           // set color
+    glRasterPos3f(-0.1, 1.0, -1.08); // set postion
+    {
+      char buf[512];
+      sprintf(buf, "%d FPS", count_fps);
+      drawText(buf);
+    }
+  }
+
+  SwapBuffers(hDC);
+
+  countFps(); // calc FPS
+}
+
+// draw text
+void drawText(char *str)
+{
+  GLsizei w = (GLsizei)fontdata_width;
+  GLsizei h = (GLsizei)fontdata_height;
+  GLfloat xorig, yorig;
+  GLfloat xmove, ymove;
+  xorig = 0;
+  yorig = 0;
+  xmove = w;
+  ymove = 0;
+
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 1); // Without this, drawing will be incorrect
+
+  int slen = strlen(str);
+
+  for (int i = 0; i < slen; i++)
+  {
+    int c = str[i];
+
+    if (c == 0)
+      break;
+
+    if (c < 0x20 || c > 0x7f)
+      c = 0x20;
+
+    c -= 0x20;
+    glBitmap(w, h, xorig, yorig, xmove, ymove, &(fontdata[c][0]));
+  }
+}
+
+BOOL getIniFilePath(TCHAR *filepath)
+{
+  TCHAR appdataFolderPath[MAX_PATH];
+  TCHAR tgtFolderPath[MAX_PATH];
+  BOOL createDir = FALSE;
+
+  // get APPDATA folder path
+  SHGetSpecialFolderPath(NULL, appdataFolderPath, CSIDL_APPDATA, FALSE);
+  if (PathCombine(tgtFolderPath, appdataFolderPath, INIDIR) == NULL)
+    return FALSE;
+
+  if (!PathFileExists(tgtFolderPath))
+  {
+    createDir = TRUE;
+  }
+  else if (!PathIsDirectory(tgtFolderPath))
+  {
+    createDir = TRUE;
+  }
+  if (createDir)
+  {
+    if (!CreateDirectory(tgtFolderPath, NULL))
+      return FALSE;
+  }
+
+  if (PathCombine(filepath, tgtFolderPath, INIFILENAME) == NULL)
+    return FALSE;
+
+  return TRUE;
+}
+
+// set config value to ini file
 void writeConfigToIniFile(void)
 {
-  char cdir[MAX_PATH];
-  char filepath[MAX_PATH];
-  char buf[256];
+  TCHAR filepath[MAX_PATH];
+  TCHAR buf[512];
 
-  GetCurrentDirectory(MAX_PATH, cdir);      // get current directory
-  PathCombine(filepath, cdir, INIFILENAME); // create save file path
+  if (!getIniFilePath(filepath))
+    return;
 
   // create and write ini file
-  sprintf(buf, "%d", waitValue);
-  WritePrivateProfileString(SECNAME, "wait", buf, filepath);
+  wsprintf(buf, _T("%d"), waitValue);
+  WritePrivateProfileString(SECNAME, _T("wait"), buf, filepath);
 
-  sprintf(buf, "%d", speedValue);
-  WritePrivateProfileString(SECNAME, "speed", buf, filepath);
+  wsprintf(buf, _T("%d"), speedValue);
+  WritePrivateProfileString(SECNAME, _T("speed"), buf, filepath);
 
-  sprintf(buf, "%d", numberValue);
-  WritePrivateProfileString(SECNAME, "number", buf, filepath);
+  wsprintf(buf, _T("%d"), numberValue);
+  WritePrivateProfileString(SECNAME, _T("number"), buf, filepath);
 
-  sprintf(buf, "%d", fps_display);
-  WritePrivateProfileString(SECNAME, "fps_display", buf, filepath);
+  wsprintf(buf, _T("%d"), fps_display);
+  WritePrivateProfileString(SECNAME, _T("fps_display"), buf, filepath);
+}
+
+void setConfigValueToGlobalWork(void)
+{
+  waitValue = 15;
+  speedValue = 1000;
+  numberValue = 1000;
+  fps_display = 1;
 }
 
 // get config value from ini file
-void getConfigFromIniFile(void)
+BOOL getConfigFromIniFile(void)
 {
-  char cdir[MAX_PATH];
-  char filepath[MAX_PATH];
-  char buf[256];
+  TCHAR filepath[MAX_PATH];
+  TCHAR cdir[MAX_PATH];
+  TCHAR buf[1024];
 
-  GetCurrentDirectory(MAX_PATH, cdir);      // get current directory
-  PathCombine(filepath, cdir, INIFILENAME); // create save file path
+  if (!getIniFilePath(filepath))
+  {
+    // not get ini filepath
+    setConfigValueToGlobalWork();
+    return FALSE;
+  }
 
   if (!PathFileExists(filepath))
-    {
-      // not found ini file. create ini file.
-      waitValue = 15;
-      speedValue = 1000;
-      numberValue = 1000;
-      fps_display = 1;
+  {
+    // not found ini file. create.
+    setConfigValueToGlobalWork();
+    writeConfigToIniFile();
+  }
 
-      writeConfigToIniFile();
-    }
+  if (!PathFileExists(filepath))
+    return FALSE;
 
-  if (PathFileExists(filepath))
-    {
-      // read ini file
-      waitValue = GetPrivateProfileInt(SECNAME, "wait", -1, filepath);
-      speedValue = GetPrivateProfileInt(SECNAME, "speed", -1, filepath);
-      numberValue = GetPrivateProfileInt(SECNAME, "number", -1, filepath);
-      fps_display = GetPrivateProfileInt(SECNAME, "fps_display", -1, filepath);
-    }
+  // read ini file
+  waitValue = GetPrivateProfileInt(SECNAME, _T("wait"), -1, filepath);
+  speedValue = GetPrivateProfileInt(SECNAME, _T("speed"), -1, filepath);
+  numberValue = GetPrivateProfileInt(SECNAME, _T("number"), -1, filepath);
+  fps_display = GetPrivateProfileInt(SECNAME, _T("fps_display"), -1, filepath);
+
+  return TRUE;
 }
 
-//////////////////////////////////////////////////
-////   INFRASTRUCTURE -- THE THREE FUNCTIONS   ///
-//////////////////////////////////////////////////
-
-// Screen Saver Procedure
-LRESULT WINAPI ScreenSaverProc(HWND hWnd, UINT message,
-                               WPARAM wParam, LPARAM lParam)
-{
-  static HDC hDC;
-  static HGLRC hRC;
-  static RECT rect;
-
-  switch (message)
-    {
-    case WM_CREATE:
-      // get window dimensions
-      GetClientRect(hWnd, &rect);
-      Width = rect.right;
-      Height = rect.bottom;
-
-      // get configuration from registry
-      getConfigFromIniFile();
-
-      // setup OpenGL, then animation
-      if (!InitGL(hWnd, hDC, hRC))
-        break;
-
-      SetupAnimation(Width, Height);
-
-      // set timer to tick every 10 ms
-      SetTimer(hWnd, TIMER, waitValue, NULL);
-
-      initCountFps();
-      return 0;
-
-    case WM_TIMER:
-      Render(hDC); // animate!
-      return 0;
-
-    case WM_DESTROY:
-      closeCountFps();
-      KillTimer(hWnd, TIMER);
-      CleanupAnimation();
-      CloseGL(hWnd, hDC, hRC);
-      return 0;
-    }
-
-  return DefScreenSaverProc(hWnd, message, wParam, lParam);
-}
-
+// clamp value
 int clamp(int v, int minv, int maxv)
 {
   if (v < minv)
@@ -612,15 +747,15 @@ void setValueOnDialog(HWND hDlg, int waitValue, int speedValue, int numberValue,
 {
   // set EDITTEXT
   {
-    char buf[2048];
+    TCHAR buf[512];
 
-    sprintf(buf, "%d", waitValue);
+    wsprintf(buf, _T("%d"), waitValue);
     SetDlgItemText(hDlg, IDC_WAITVALUE, buf);
 
-    sprintf(buf, "%d", speedValue);
+    wsprintf(buf, _T("%d"), speedValue);
     SetDlgItemText(hDlg, IDC_SPEED, buf);
 
-    sprintf(buf, "%d", numberValue);
+    wsprintf(buf, _T("%d"), numberValue);
     SetDlgItemText(hDlg, IDC_NUMBER, buf);
   }
 
@@ -637,70 +772,25 @@ void getValueFromDialog(HWND hDlg)
 {
   // get EDITTEXT
   {
-    char buf[2048];
+    TCHAR buf[2048];
+    int n;
 
     // get wait value
-    GetDlgItemText(hDlg, IDC_WAITVALUE, buf, sizeof(buf));
-    waitValue = clamp(atoi(buf), 5, 200);
+    GetDlgItemText(hDlg, IDC_WAITVALUE, buf, sizeof(buf) / sizeof(TCHAR));
+    n = StrToInt(buf);
+    waitValue = clamp(n, 5, 200);
 
     // get speed value
-    GetDlgItemText(hDlg, IDC_SPEED, buf, sizeof(buf));
-    speedValue = clamp(atoi(buf), 100, 4000);
+    GetDlgItemText(hDlg, IDC_SPEED, buf, sizeof(buf) / sizeof(TCHAR));
+    n = StrToInt(buf);
+    speedValue = clamp(n, 100, 4000);
 
     // get number value
-    GetDlgItemText(hDlg, IDC_NUMBER, buf, sizeof(buf));
-    numberValue = clamp(atoi(buf), 10, OBJ_MAX);
+    GetDlgItemText(hDlg, IDC_NUMBER, buf, sizeof(buf) / sizeof(TCHAR));
+    n = StrToInt(buf);
+    numberValue = clamp(n, 10, OBJ_MAX);
   }
 
   // get CHECKBOX (fps display)
   fps_display = (IsDlgButtonChecked(hDlg, IDC_FPSDISPLAY) == BST_CHECKED) ? 1 : 0;
-}
-
-// screen saver config dialog procedure
-BOOL WINAPI ScreenSaverConfigureDialog(HWND hDlg, UINT message,
-                                       WPARAM wParam, LPARAM lParam)
-{
-  // InitCommonControls();
-  // would need this for slider bars or other common controls
-
-  switch (message)
-    {
-    case WM_INITDIALOG:
-      // Initialize config dialog
-      LoadString(hMainInstance, IDS_DESCRIPTION, szAppName, 40);
-      getConfigFromIniFile();
-      setValueOnDialog(hDlg, waitValue, speedValue, numberValue, fps_display);
-      return TRUE;
-
-    case WM_COMMAND:
-      switch (LOWORD(wParam))
-        {
-        case IDOK:
-          // ok button pressed
-          getValueFromDialog(hDlg);
-          writeConfigToIniFile();
-          EndDialog(hDlg, LOWORD(wParam) == IDOK);
-          return TRUE;
-
-        case IDCANCEL:
-          // cancel button pressed
-          EndDialog(hDlg, LOWORD(wParam) == IDOK);
-          return TRUE;
-
-        case IDC_RESET:
-          // reset button pressed
-          setValueOnDialog(hDlg, 15, 1000, 1000, 1);
-          return TRUE;
-        }
-
-      return FALSE;
-    } // end command switch
-
-  return FALSE;
-}
-
-// needed for SCRNSAVE.LIB (or libscrnsave.a)
-BOOL WINAPI RegisterDialogClasses(HANDLE hInst)
-{
-  return TRUE;
 }

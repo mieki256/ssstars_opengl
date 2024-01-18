@@ -1,7 +1,7 @@
 ssstars_opengl
 ==============
 
-C++ and OpenGL screensaver similar to ssstars.scr.
+C++ and OpenGL Windows screensaver similar to ssstars.scr.
 
 Screenshots
 -----------
@@ -13,10 +13,9 @@ Screenshots
 Install
 -------
 
-Copy 2 files to your Windows system folder.
+Copy 1 files to your Windows system folder.
 
 * ssstars\_opengl.scr
-* ssstars\_opengl.ini
 
 ```
 Windows 64bit : C:\Windows\SysWOW64\
@@ -24,6 +23,24 @@ Windows 32bit : C:\Windows\System32\
 ```
 
 The screen saver name is "Stars GL".
+
+This program saves settings in ini files. It will be created in the following location.
+
+```
+%APPDATA%\ssstars_opengl\ssstars_opengl.ini
+
+For Windows10 : C:\Users\(USERNAME)\AppData\Roaming\ssstars_opengl\ssstars_opengl.ini
+```
+
+Uninstall
+---------
+
+Please delete the following files.
+
+```
+C:\Windows\SysWOW64\ssstars_opengl.scr (or C:\Windows\System32\ssstars_opengl.scr)
+%APPDATA%\ssstars_opengl\ssstars_opengl.ini
+```
 
 Build Requirement / Environment
 -------------------------------
@@ -56,4 +73,3 @@ Use library
 -----------
 
 [nothings/stb: stb single-file public domain libraries for C/C++](https://github.com/nothings/stb)
-
