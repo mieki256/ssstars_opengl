@@ -54,17 +54,26 @@ Build Requirement / Environment
 
 Please enter "make".
 
+### Use font
+
+[ProFont for Windows, for Macintosh, for Linux](https://tobiasjung.name/profont/)
+
+### Use library
+
+[nothings/stb: stb single-file public domain libraries for C/C++](https://github.com/nothings/stb)
+
 Author
 ------
 
 [mieki256](https://github.com/mieki256)
 
-Use font
---------
+License
+-------
 
-[ProFont for Windows, for Macintosh, for Linux](https://tobiasjung.name/profont/)
+mieki256が書いた部分は CC0 / Public Domain 扱いということで…。
 
-Use library
------------
+Reference
+---------
 
-[nothings/stb: stb single-file public domain libraries for C/C++](https://github.com/nothings/stb)
+[How to Scr: Writing an OpenGL Screensaver for Windows](http://www.cityintherain.com/howtoscr.html)
+
