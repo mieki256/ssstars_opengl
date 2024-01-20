@@ -1,4 +1,4 @@
-// Last updated: <2024/01/19 02:13:31 +0900>
+// Last updated: <2024/01/20 21:26:56 +0900>
 //
 // stars GL screen saver by mieki256.
 //
@@ -196,7 +196,7 @@ BOOL WINAPI ScreenSaverConfigureDialog(HWND hDlg, UINT message,
 
     case IDCANCEL:
       // cancel button pressed
-      EndDialog(hDlg, LOWORD(wParam) == IDOK);
+      EndDialog(hDlg, LOWORD(wParam) == IDCANCEL);
       return TRUE;
 
     case IDC_RESET:
