@@ -37,3 +37,5 @@ BEGIN
   PUSHBUTTON    "Reset",   IDC_RESET,  10, 100, 50, 14
 END
 
+1 24 "ssstars_opengl.scr.manifest"
+

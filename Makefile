@@ -17,8 +17,7 @@ fontdata_profont.h: font_profont.png fontpng2bits.py Makefile
 
 .PHONY: cleanall
 cleanall:
-	rm -f *.scr
-	rm -f *.o
+	rm -f *.scr *.o
 
 .PHONY: clean
 clean:
